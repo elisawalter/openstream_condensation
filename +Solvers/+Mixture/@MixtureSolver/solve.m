@@ -97,7 +97,7 @@ function solver(solveINIT)
     startTime = tic();
     
     % Initialize
-    dWv = 0; dHv = 0;
+    dWv = 0; dHv = 0; dQ = 0;
     
     % Time loop
     for tIdx = 2:length(mix)                                               % Loop over time steps
@@ -113,6 +113,15 @@ function solver(solveINIT)
 
         % Axial sweep
         for zIdx = 2:mixSolver.NZ                                          % Loop over axial nodes
+
+            % Boundary-condition time index:
+            % - steady-state pseudo-time always uses first BC snapshot
+            % - transient uses the matching (bounded) BC snapshot
+            if solveINIT
+                bcTidx = 1;
+            else
+                bcTidx = min(tIdx, numel(mixSolver.boundaryConditions.BCTYPE));
+            end
             
             LHGR   = mix(tIdx).LHGR(zIdx);                                 % [W/m] Linear heat generation rate
             
@@ -134,6 +143,7 @@ function solver(solveINIT)
                 Witer = mix(tIdx).W(zIdx);                                          % [kg/s] Mixture mass flow rate
                 Piter = mix(tIdx).P(zIdx);                                          % [Pa] Pressure
                 Hiter = mix(tIdx).H(zIdx);                                          % [J/kg] Mixture enthalpy
+                Qiter = mix(tIdx).HFLUX(zIdx,:);                                    % [W/m^2] Wall heat flux
                 
                 % Update secondary parameters
                 U     = mix(tIdx).U(zIdx);                                          % [m/s] Mixture velocity
@@ -151,6 +161,69 @@ function solver(solveINIT)
                 Hnew = (mix(tIdx).H(zIdx-1)+DZ./mix(tIdx).W(zIdx)*(dECT+sum(LHGR)) + ...
                        Hold/U*DZ/DT)/(1+DZ/U/DT);                                   % [J/kg] Update mixture enthalpy
                 mix(tIdx).H(zIdx) = (1-options.RELAXHM)*Hiter+options.RELAXHM*Hnew; % [J/kg] Apply relaxation
+
+                % TWALL-driven wall heat-flux update
+                bcType = string(mixSolver.boundaryConditions.BCTYPE(bcTidx));
+                if bcType ~= "HFLUX"
+                    % Use local saturation properties at updated local pressure.
+                    Plocal = max(1.0,mix(tIdx).P(zIdx));
+                    TsatLocal = fluid(tIdx).coolpropH.temperature('P',Plocal,'Q',1); % [K]
+                    hfgLocal = fluid(tIdx).coolpropH.enthalpy('P',Plocal,'Q',1) - ...
+                        fluid(tIdx).coolpropH.enthalpy('P',Plocal,'Q',0);            % [J/kg]
+
+                    % Resolve target wall temperature profile at this node.
+                        twBC = reshape(mixSolver.boundaryConditions.TWALL(zIdx,:,bcTidx),1,[]);
+                    if any(isnan(twBC),"all")
+                        error('OpenSTREAM:MixtureSolver:MissingTWALLProfile', ...
+                            'TWALL profile contains NaN at node %d and time index %d for BCTYPE=%s.', ...
+                            zIdx, bcTidx, bcType);
+                    end
+
+                    % Get local condensation HTC based on current state.
+                    hcond = mix(tIdx).HWALLCOND(zIdx);                               % [W/m^2/K]
+                    hcond = max(hcond,1E-8);
+
+                    % Local fixed-point style update of q from target wall temperature.
+                    switch bcType
+                        case "TWALLIN"
+                            qTarget = hcond.*(twBC - TsatLocal);                      % [W/m^2]
+                        case "TWALLOUT"
+                            Di = geom.HDIAM;                                           % [m] Inner equivalent diameter
+                            Do = geom.DOUT;                                            % [m] Outer wall diameter
+                            kw = geom.KWALL;                                           % [W/m/K] Wall conductivity
+
+                            if Do <= Di
+                                error('OpenSTREAM:MixtureSolver:InvalidWallDiameters', ...
+                                    'TWALLOUT requires DOUT > HDIAM. Current values: DOUT=%.6g, HDIAM=%.6g.', Do, Di);
+                            end
+
+                            Rwall = Di.*log(Do./Di)./(2.*kw);                          % [m^2.K/W] Wall conduction resistance referred to inner wall
+                            qTarget = (twBC - TsatLocal)./(1./hcond + Rwall);          % [W/m^2]
+                        otherwise
+                            error('OpenSTREAM:MixtureSolver:InvalidBCTYPE', ...
+                                'Unsupported BCTYPE "%s".', bcType);
+                    end
+
+                    qTarget = min(0,qTarget);                                         % Condensation only
+                    qNew = (1-options.RELAXQ).*Qiter + options.RELAXQ.*qTarget;
+
+                    % Preserve total-power consistency for TWALL mode by direct local update.
+                    mix(tIdx).HFLUX(zIdx,:) = qNew;
+
+                    % Keep linear heat generation in sync with local flux update.
+                    LHGR = mix(tIdx).LHGR(zIdx);
+
+                    % Record heat-flux convergence metric.
+                    dQ = max(abs(qNew-Qiter));
+
+                    % Keep latent heat update local and pressure-consistent for diagnostics/mass-transfer coupling.
+                    mix(tIdx).MRM.TEVAP(zIdx,:) = mix(tIdx).MRM.TEVAP(zIdx,:).*0 + mix(tIdx).MRM.TEVAP(zIdx,:);
+                    mix(tIdx).MRM.TCOND(zIdx,:) = mix(tIdx).MRM.TCOND(zIdx,:).*0 + mix(tIdx).MRM.TCOND(zIdx,:);
+                    %#ok<NASGU>
+                    hfgLocal = hfgLocal; %#ok<NASGU>
+                else
+                    dQ = 0;
+                end
                 
                 switch model.THERMALNONEQ
                     case 'MRM'
@@ -226,7 +299,7 @@ function solver(solveINIT)
                 dW = abs((mix(tIdx).W(zIdx)-Witer));                       % [kg/s] Mass flow rate error between inner iterations
                 dP = abs((mix(tIdx).P(zIdx)-Piter));                       % [Pa]   Pressure error between inner iterations
                 dH = abs((mix(tIdx).H(zIdx)-Hiter));                       % [J/kg] Enthalpy error between inner iterations
-                if all([dW < options.ERRORW, dP < options.ERRORP, dH < options.ERRORH, dWv < options.ERRORW, dHv < options.ERRORH])
+                if all([dW < options.ERRORW, dP < options.ERRORP, dH < options.ERRORH, dWv < options.ERRORW, dHv < options.ERRORH, dQ < options.ERRORQ])
                     break;
                 elseif itr == options.MAXITER
                     % set SOLVED flag to SOLVEDNOTCONVERGED
@@ -285,6 +358,7 @@ function solver(solveINIT)
             mix(tIdx).ITR.DW(zIdx)          = dW;
             mix(tIdx).ITR.DP(zIdx)          = dP;
             mix(tIdx).ITR.DH(zIdx)          = dH;
+            mix(tIdx).ITR.DQ(zIdx)          = dQ;
             mix(tIdx).ITR.DWV(zIdx,1:nwall) = dWv;
             mix(tIdx).ITR.DHV(zIdx,1:nwall) = dHv;
 
