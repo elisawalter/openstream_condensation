@@ -10,6 +10,20 @@ MOMENTFILM    ! Film momentum conservation model                           > FUL
 MOMENTDROP    ! Drop momentum conservation model                           > FULL
 END
 
+ID            ! Models ID                                                  > PURECOND
+NNODES        ! Number of axial nodes                                      > 100
+FLUID         ! Fluid ID                                                   > WATER
+INTNU         ! Interfacial heat transfer model                            > RELAXATION
+THERMALRELAX  ! MRM time relaxation model                                  > HOMOGENEOUS
+VOID          ! Void fraction model                                        > ZIVI
+CONDHTM       ! Condensation wall heat transfer model                      > NUSSELT
+TPFM          ! Two-phase friction multiplier model                        > SLIP
+MOMENTLIQUID  ! Liquid momentum conservation model                         > FULL
+MOMENTGAS     ! Gas momentum conservation model                            > FULL
+MOMENTFILM    ! Film momentum conservation model                           > FULL
+MOMENTDROP    ! Drop momentum conservation model                           > FULL
+END
+
 ID            ! Model ID                                                   > TUTORIAL2A
 NNODES        ! Number of axial nodes                                      > 100
 FLUID         ! Fluid ID                                                   > WATER

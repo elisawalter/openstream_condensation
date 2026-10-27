@@ -19,7 +19,7 @@ classdef Mixture < Solvers.AbstractField
 
         % Wall heat flux
 
-        HFLUX        (:,:) double  {mustBeNumeric,mustBeNonnegative}       = 1.                   % Wall heat flux [W/m^2]
+        HFLUX        (:,:) double  {mustBeNumeric}                          = 1.                   % Wall heat flux [W/m^2]
 
         % Flow variables
 
@@ -1046,12 +1046,74 @@ classdef Mixture < Solvers.AbstractField
             switch model.TPHTM
                 case 'THOM'
                     % Thom's correlation, modified in term of heat transfer coefficient.
-                    q  = mix.HFLUX(zIdx,:)+1E-6;                           % [W/m^2]
+                    q  = max(mix.HFLUX(zIdx,:),0)+1E-6;                    % [W/m^2]
                     Tb = mix.liquid.T(zIdx);                               % [K]
                     hwallboil = q./(mix.fluid.TSAT-Tb+22.5.*(q./1E6).^0.5.*exp(-mix.P(zIdx)./1E6/8.7)); % [W/m^2/K]
             end
 
             hwallboil = max(0,hwallboil);
+         end
+
+         function hwallcond = HWALLCOND(mix, zIdx)
+            %HWALLCOND Condensation wall heat transfer coefficient [W/m^2/K]
+            %
+            % Computes a dedicated condensation wall heat transfer coefficient
+            % for negative wall heat flux in two-phase flow.
+
+            if nargin < 2, zIdx = (1:mix(1).NZ).'; end
+
+            model = mix.inputSet.model;
+            geom  = mix.inputSet.geometry;
+            fld   = mix.fluid;
+
+            X   = max(0,min(1,mix.X(zIdx)));                               % [-] Quality in [0,1]
+            Ww  = max(1E-12,mix.WWALL(zIdx));                              % [kg/s] Wall-distributed flow rate
+            RHOL = fld.RHOL(mix.liquid.H(zIdx));                            % [kg/m^3]
+            RHOV = fld.RHOV(mix.vapor.H(zIdx));                             % [kg/m^3]
+            MUL  = fld.MUL(mix.liquid.H(zIdx));                             % [Pa.s]
+            KL   = fld.KL(mix.liquid.H(zIdx));                              % [W/m/K]
+            PRL  = fld.PRANDTLL(mix.liquid.H(zIdx));                        % [-]
+
+            % Film Reynolds number based on local wall perimeter.
+            Ref = 4.*(1-X).*Ww./(max(1E-12,MUL).*geom.PERIM);               % [-]
+            Ref = max(1E-8,Ref);
+
+            switch model.CONDHTM
+                case InputEnums.CONDHTM.NONE
+                    hwallcond = zeros(size(Ww));
+
+                case InputEnums.CONDHTM.NUSSELT
+                    % Nusselt-type vertical-film piecewise correlation.
+                    g  = model.G;
+                    nu = max(1E-12,MUL./max(1E-12,RHOL));
+                    hstar = zeros(size(Ref));
+
+                    idxLam = Ref < 30;
+                    idxWav = Ref >= 30 & Ref < 1600;
+                    idxTur = Ref >= 1600;
+
+                    hstar(idxLam) = 1.47.*Ref(idxLam).^(-1/3);
+                    hstar(idxWav) = Ref(idxWav)./(1.08.*Ref(idxWav).^1.22 - 5.2);
+                    hstar(idxTur) = Ref(idxTur)./(8750 + 58.*PRL(idxTur).^(-0.5).*(Ref(idxTur).^0.75 - 253));
+
+                    hwallcond = hstar.*KL./(nu.^2./g).^(1/3);
+
+                case InputEnums.CONDHTM.SHAH
+                    % Simplified Shah-type condensation scaling.
+                    REL = max(1,mix.MFLUX(zIdx).*geom.HDIAM./max(1E-12,MUL));
+                    Xtt = ((1-X)./max(1E-8,X)).^0.9.*(RHOV./RHOL).^0.5.*(MUL./max(1E-12,fld.MUV(mix.vapor.H(zIdx)))).^0.1;
+                    NUL = 0.023.*REL.^0.8.*PRL.^0.4;
+                    hsp = NUL.*KL./geom.HDIAM;
+                    hwallcond = hsp.*(1 + 1.8./max(1E-8,Xtt).^0.8);
+
+                case InputEnums.CONDHTM.KIMMUDAWAR
+                    % Shear-dominated condensation proxy based on liquid film Reynolds.
+                    RELf = max(1,Ref);
+                    NULf = 0.048.*RELf.^0.69.*PRL.^0.34;
+                    hwallcond = NULf.*KL./geom.HDIAM;
+            end
+
+            hwallcond = max(0,hwallcond);
          end
 
          function [hwallbt, Tbv] = HWALLPOSTCBT(mix, twall, zIdx)
@@ -1233,6 +1295,17 @@ classdef Mixture < Solvers.AbstractField
             hsp   = mix.liquid.HWALL(twall,zIdx);                          % [W/m^2/K] Single-phase liquid
             hboil = mix.HWALLBOIL(zIdx);                                   % [W/m^2/K] Boiling
             hwall = max(hsp,hboil);                                        % [W/m^2/K]
+
+            % Condensation branch for negative heat flux in two-phase region.
+            q = mix.HFLUX(zIdx,:);
+            xloc = repmat(mix.X(zIdx),1,geom.NWALL);
+            idxCond = q < 0 & xloc > 0 & xloc < 1;
+            if any(idxCond(:))
+                hcond = mix.HWALLCOND(zIdx);                               % [W/m^2/K]
+                idxCondUse = idxCond & hcond > 0;
+                hwall(idxCondUse) = hcond(idxCondUse);
+            end
+
             Tbv   = repmat(mix.fluid.TSAT,length(zIdx),geom.NWALL);         % [K] Saturated vapor temperature
 
             % Post-CBT
@@ -1281,6 +1354,11 @@ classdef Mixture < Solvers.AbstractField
                 % Pre-CBT
                 twall = Tbl + q./hwall;                                    % [K]
 
+                % Condensation regime in two-phase flow
+                xloc = repmat(mix.X(zIdx),1,geom.NWALL);
+                idxCond = q < 0 & xloc > 0 & xloc < 1;
+                twall(idxCond) = mix.fluid.TSAT + q(idxCond)./hwall(idxCond);
+
                 % Post-CBT
                 twallcbt = Tbv + q./hwall;                                 % [K]
                 twall(idxbt) = twallcbt(idxbt);                            % [K]
@@ -1290,6 +1368,7 @@ classdef Mixture < Solvers.AbstractField
             end
             if err > MaxErr, fprintf('%s Wall temperature : not converged -> err = %0.4f\n',class(mix), err); end
             tbulk = Tbl;
+            tbulk(idxCond) = mix.fluid.TSAT;
             tbulk(idxbt) = Tbv(idxbt);
         end
 
@@ -2405,6 +2484,7 @@ classdef Mixture < Solvers.AbstractField
             %
             % - HOMOGENEOUS: Assumes unity slip ratio
             % - SLIP: Uses a constant slip ratio
+            % - ZIVI: Uses :math:`S=(\rho_l/\rho_v)^{1/3}` slip ratio
             % - BESTION: Applies Bestion drift flux correlation
             % - EPRI: Applies EPRI drift flux correlation with iterative convergence
             %
@@ -2432,6 +2512,13 @@ classdef Mixture < Solvers.AbstractField
                     % [-] Slip void model
                     mix.vf(zIdx) = vfslip(mix.X(zIdx),model.SLIP);
 
+                case InputEnums.VOID.ZIVI
+                    % [-] Zivi slip void model
+                    RHOL = mix.fluid.RHOL(mix.liquid.H(zIdx));
+                    RHOV = mix.fluid.RHOV(mix.vapor.H(zIdx));
+                    Szivi = (RHOL./RHOV).^(1/3);
+                    mix.vf(zIdx) = vfslip(mix.X(zIdx),Szivi);
+
                 case InputEnums.VOID.BESTION
                     % [-] Bestion drift flux model
                     %
@@ -2439,7 +2526,7 @@ classdef Mixture < Solvers.AbstractField
                     C0 = 1.;                                               % [-] Distribution parameter
                     RHOL = mix.fluid.RHOL(mix.liquid.H(zIdx));
                     RHOV = mix.fluid.RHOV(mix.vapor.H(zIdx));
-                    ugj = 0.188.*sqrt(model.G.*geom.HDIAM.*(RHOL-RHOV)./RHOV); % [m/s] Drift velocity
+                    ugj = 0.188.*sqrt(model.G.*geom.HDIAM.*(RHOL-RHOV)./RHOV).*cos(geom.ANGLE/180*pi); % [m/s] Drift velocity
                     mix.vf(zIdx) = vfdrift(C0,ugj);
 
                 case InputEnums.VOID.EPRI
