@@ -1296,9 +1296,17 @@ classdef Mixture < Solvers.AbstractField
             hboil = mix.HWALLBOIL(zIdx);                                   % [W/m^2/K] Boiling
             hwall = max(hsp,hboil);                                        % [W/m^2/K]
 
-            % Condensation branch for negative heat flux in two-phase region.
             q = mix.HFLUX(zIdx,:);
             xloc = repmat(mix.X(zIdx),1,geom.NWALL);
+
+            % Single-phase vapor branch.
+            idxVapSp = xloc >= 1;
+            if any(idxVapSp(:))
+                hvsp = mix.vapor.HWALL(twall,zIdx);                        % [W/m^2/K] Single-phase vapor
+                hwall(idxVapSp) = hvsp(idxVapSp);
+            end
+
+            % Condensation branch for negative heat flux in two-phase region.
             idxCond = q < 0 & xloc > 0 & xloc < 1;
             if any(idxCond(:))
                 hcond = mix.HWALLCOND(zIdx);                               % [W/m^2/K]
@@ -1338,6 +1346,14 @@ classdef Mixture < Solvers.AbstractField
             q = mix.HFLUX(zIdx,:);                                         % [W/m^2]
 
             Tbl = repmat(mix.liquid.T(zIdx),1,geom.NWALL);                 % [K] Fluid bulk temperature based on liquid phase
+            xloc = repmat(mix.X(zIdx),1,geom.NWALL);                       % [-] Local vapor quality
+
+            % Use vapor bulk temperature in single-phase vapor regions.
+            idxVapSp = xloc >= 1;
+            if any(idxVapSp(:))
+                Tvap = repmat(mix.vapor.T(zIdx),1,geom.NWALL);             % [K]
+                Tbl(idxVapSp) = Tvap(idxVapSp);
+            end
 
             idxbt = mix.CBT(zIdx) | mix.MFBT(zIdx);                        % Boiling transition flag
 
@@ -1355,7 +1371,6 @@ classdef Mixture < Solvers.AbstractField
                 twall = Tbl + q./hwall;                                    % [K]
 
                 % Condensation regime in two-phase flow
-                xloc = repmat(mix.X(zIdx),1,geom.NWALL);
                 idxCond = q < 0 & xloc > 0 & xloc < 1;
                 twall(idxCond) = mix.fluid.TSAT + q(idxCond)./hwall(idxCond);
 

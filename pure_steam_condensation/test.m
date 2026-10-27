@@ -58,7 +58,7 @@ warning('off','all');
 warningCleanup = onCleanup(@() warning(warningState));
 
 results = struct('id',{},'state',{},'maxCondResidual',{},'hasTwoPhaseCondZone',{},'vfMean',{});
-plotData = struct();
+plotCases = struct('id',{},'mix',{},'fluid',{},'geom',{},'twall',{},'hwall',{});
 
 for idx = 1:numel(modelCases)
     c = modelCases(idx);
@@ -118,14 +118,14 @@ for idx = 1:numel(modelCases)
         'hasTwoPhaseCondZone', hasTwoPhaseCondZone, ...
         'vfMean', mean(mix.VF(),'omitnan')); %#ok<SAGROW>
 
-    % Store NUSSELT downflow case for condensation post-processing plots.
-    if strcmp(c.id,'PURECOND_NUSSELT_ZIVI')
-        plotData.mix = mix;
-        plotData.fluid = mixSolver.fluid;
-        plotData.geom = inputSet.geometry;
-        plotData.twall = twall;
-        plotData.hwall = hwall;
-    end
+    % Store each case for post-processing and plotting.
+    newCaseIdx = numel(plotCases) + 1;
+    plotCases(newCaseIdx).id = c.id;
+    plotCases(newCaseIdx).mix = mix;
+    plotCases(newCaseIdx).fluid = mixSolver.fluid;
+    plotCases(newCaseIdx).geom = inputSet.geometry;
+    plotCases(newCaseIdx).twall = twall;
+    plotCases(newCaseIdx).hwall = hwall;
 end
 
 % Explicitly exercise the Bestion angle effect (cos(ANGLE)) by comparing
@@ -172,47 +172,62 @@ vfUp   = upSolver.mixture(1).VF;
 assert(max(abs(vfDown-vfUp),[],'omitnan') > 1E-6, ...
     'Bestion upflow/downflow void fraction are unexpectedly identical; angle dependence may be inactive.');
 
-% Build and save condensation figures from the baseline NUSSELT downflow case.
-assert(isfield(plotData,'mix'), ...
-    'Baseline NUSSELT downflow case was not stored for plotting.');
-
-mix = plotData.mix;
-fluid = plotData.fluid;
-geom = plotData.geom;
-twall = plotData.twall;
-hwall = plotData.hwall;
-
-z = mix.Z(:);                                                             % [m]
-q = mix.HFLUX;                                                            % [W/m^2]
-x = repmat(mix.X(),1,size(q,2));                                          % [-]
-rhol = fluid.RHOL(mix.liquid.H);                                          % [kg/m^3]
-mul = fluid.MUL(mix.liquid.H);                                            % [Pa.s]
-kl = fluid.KL(mix.liquid.H);                                              % [W/m/K]
-
-qprime = sum(geom.PERIM.*q,2);                                            % [W/m]
-mcondPerLength = -qprime./fluid.HFG;                                      % [kg/s/m] -q'/h_fg
-
-wWall = geom.RWALL.*mix.W;                                                % [kg/s] Wall-distributed flow
-ref = 4.*(1-x).*wWall./(max(1E-12,mul).*geom.PERIM);                      % [-] Film Reynolds number
-hcond = mix.HWALLCOND();                                                  % [W/m^2/K] Condensation HTC
-deltaNusselt = kl./max(hcond,1E-12);                                      % [m] Nusselt film thickness estimate
-
-% Build wall-averaged traces for compact plotting.
-refMean = mean(ref,2,'omitnan');
-deltaMean = mean(deltaNusselt,2,'omitnan');
-hcondMean = mean(hcond,2,'omitnan');
-twallMean = mean(twall,2,'omitnan');
-
 figDir = fullfile(outputDir,'figures');
 if ~isfolder(figDir)
     mkdir(figDir);
 end
 
-saveLineFigure(z,mcondPerLength, 'z [m]', '-q''/h_{fg} [kg/s/m]', 'Condensation rate per length', fullfile(figDir,'condensation_rate_per_length'));
-saveLineFigure(z,refMean,       'z [m]', 'Re_f [-]',             'Film Reynolds number',          fullfile(figDir,'film_reynolds_number'));
-saveLineFigure(z,deltaMean,     'z [m]', '\delta [m]',          'Nusselt film thickness',        fullfile(figDir,'nusselt_film_thickness'));
-saveLineFigure(z,hcondMean,     'z [m]', 'h_{cond} [W/m^2/K]',   'Condensation heat transfer coefficient', fullfile(figDir,'h_cond'));
-saveLineFigure(z,twallMean,     'z [m]', 'T_w [K]',              'Wall temperature',              fullfile(figDir,'t_wall'));
+for iCase = 1:numel(plotCases)
+    caseData = plotCases(iCase);
+    caseId = caseData.id;
+    mix = caseData.mix;
+    fluid = caseData.fluid;
+    geom = caseData.geom;
+    twall = caseData.twall;
+
+    z = mix.Z(:);                                                         % [m]
+    q = mix.HFLUX;                                                        % [W/m^2]
+    x = repmat(mix.X(),1,size(q,2));                                      % [-]
+    mul = fluid.MUL(mix.liquid.H);                                        % [Pa.s]
+    kl = fluid.KL(mix.liquid.H);                                          % [W/m/K]
+
+    qprime = sum(geom.PERIM.*q,2);                                        % [W/m]
+    mcondPerLength = -qprime./fluid.HFG;                                  % [kg/s/m] -q'/h_fg
+
+    wWall = geom.RWALL.*mix.W;                                            % [kg/s] Wall-distributed flow
+    ref = 4.*(1-x).*wWall./(max(1E-12,mul).*geom.PERIM);                  % [-] Film Reynolds number
+    hcond = mix.HWALLCOND();                                              % [W/m^2/K] Condensation HTC
+    deltaNusselt = kl./max(hcond,1E-12);                                  % [m] Nusselt film thickness estimate
+
+    % Build wall-averaged traces for compact plotting.
+    qMean = mean(q,2,'omitnan');
+    refMean = mean(ref,2,'omitnan');
+    deltaMean = mean(deltaNusselt,2,'omitnan');
+    hcondMean = mean(hcond,2,'omitnan');
+    twallMean = mean(twall,2,'omitnan');
+
+    uLiquid = mix.liquid.U();                                             % [m/s]
+    uVapor = mix.vapor.U();                                               % [m/s]
+    uMix = mix.U();                                                       % [m/s]
+    vf = mix.VF();                                                        % [-]
+
+    caseFigDir = fullfile(figDir,caseId);
+    if ~isfolder(caseFigDir)
+        mkdir(caseFigDir);
+    end
+
+    saveLineFigure(z,mcondPerLength, 'z [m]', '-q''/h_{fg} [kg/s/m]', 'Condensation rate per length', fullfile(caseFigDir,'condensation_rate_per_length'));
+    saveLineFigure(z,refMean,       'z [m]', 'Re_f [-]',             'Film Reynolds number',          fullfile(caseFigDir,'film_reynolds_number'));
+    saveLineFigure(z,deltaMean,     'z [m]', '\delta [m]',          'Nusselt film thickness',        fullfile(caseFigDir,'nusselt_film_thickness'));
+    saveLineFigure(z,hcondMean,     'z [m]', 'h_{cond} [W/m^2/K]',   'Condensation heat transfer coefficient', fullfile(caseFigDir,'h_cond'));
+    saveLineFigure(z,twallMean,     'z [m]', 'T_w [K]',              'Wall temperature',              fullfile(caseFigDir,'t_wall'));
+    saveMultiLineFigure( ...
+        z, {uLiquid,uVapor,uMix}, {'Liquid','Gas','Mixture'}, ...
+        'z [m]', 'Velocity [m/s]', 'Liquid, gas, and mixture velocity', ...
+        fullfile(caseFigDir,'velocity_profiles'));
+    saveLineFigure(z,vf,            'z [m]', 'v_f [-]',              'Void fraction',                 fullfile(caseFigDir,'vf_profile'));
+    saveLineFigure(z,qMean,         'z [m]', 'HF [W/m^2]',           'Wall heat flux',                fullfile(caseFigDir,'hf_profile'));
+end
 
 disp('Downward pure-steam condensation integration test: PASSED');
 disp(struct2table(results));
@@ -226,6 +241,26 @@ function saveLineFigure(x,y,xLabelText,yLabelText,plotTitle,fileStem)
 fig = figure('Visible','off');
 plot(x,y,'LineWidth',1.6);
 grid on;
+xlabel(xLabelText);
+ylabel(yLabelText);
+title(plotTitle);
+
+saveas(fig,[fileStem '.png']);
+saveas(fig,[fileStem '.fig']);
+close(fig);
+end
+
+function saveMultiLineFigure(x,ySeries,legendLabels,xLabelText,yLabelText,plotTitle,fileStem)
+%SAVEMULTILINEFIGURE Create, format, and save a multi-line figure.
+
+fig = figure('Visible','off');
+hold on;
+for i = 1:numel(ySeries)
+    plot(x,ySeries{i},'LineWidth',1.6);
+end
+hold off;
+grid on;
+legend(legendLabels,'Location','best');
 xlabel(xLabelText);
 ylabel(yLabelText);
 title(plotTitle);
