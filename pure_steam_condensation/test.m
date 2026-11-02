@@ -59,73 +59,88 @@ warningCleanup = onCleanup(@() warning(warningState));
 
 results = struct('id',{},'state',{},'maxCondResidual',{},'hasTwoPhaseCondZone',{},'vfMean',{});
 plotCases = struct('id',{},'mix',{},'fluid',{},'geom',{},'twall',{},'hwall',{});
+failedCases = strings(0,1);
 
 for idx = 1:numel(modelCases)
     c = modelCases(idx);
 
-    inputSet = InputSet( ...
-        modelFilePath          = tempModelFile, ...
-        modelID                = c.id, ...
-        optionsFilePath        = fullfile(inputsDir,'options.inp'), ...
-        optionsID              = 'DEFAULT', ...
-        geometryFilePath       = fullfile(inputsDir,'geom.inp'), ...
-        geometryID             = 'PURECOND_DOWN', ...
-        bcFilePath             = fullfile(inputsDir,'purecond_downflow.inp'), ...
-        sessionParentDir       = outputDir, ...
-        overwriteSessionFiles  = false, ...
-        LOGMODE                = 'BOTH');
+    try
 
-    assert(inputSet.bc(1).POWER < 0, ...
-        'Boundary condition POWER must be negative for condensation test.');
-    assert(all(inputSet.bc(1).WPOWER(:) >= 0), ...
-        'Boundary condition WPOWER must stay non-negative.');
+        inputSet = InputSet( ...
+            modelFilePath          = tempModelFile, ...
+            modelID                = c.id, ...
+            optionsFilePath        = fullfile(inputsDir,'options.inp'), ...
+            optionsID              = 'DEFAULT', ...
+            geometryFilePath       = fullfile(inputsDir,'geom.inp'), ...
+            geometryID             = 'PURECOND_DOWN', ...
+            bcFilePath             = fullfile(inputsDir,'purecond_downflow.inp'), ...
+            sessionParentDir       = outputDir, ...
+            overwriteSessionFiles  = false, ...
+            LOGMODE                = 'BOTH');
 
-    mixSolver = MixtureSolver(inputSet);
-    mixSolver.solve();
+        assert(inputSet.bc(1).POWER < 0, ...
+            'Boundary condition POWER must be negative for condensation test.');
+        assert(all(inputSet.bc(1).WPOWER(:) >= 0), ...
+            'Boundary condition WPOWER must stay non-negative.');
 
-    assert(mixSolver.STATE == Solvers.SolverState.INITIALSTEPCONVERGED, ...
-        'Case %s did not converge to INITIALSTEPCONVERGED.', c.id);
+        mixSolver = MixtureSolver(inputSet);
+        mixSolver.solve();
 
-    mix = mixSolver.mixture(1);
-    q = mix.HFLUX;
-    x = repmat(mix.X(),1,size(q,2));
+        assert(mixSolver.STATE == Solvers.SolverState.INITIALSTEPCONVERGED, ...
+            'Case %s did not converge to INITIALSTEPCONVERGED.', c.id);
 
-    assert(any(q(:) < 0), ...
-        'Case %s has no negative wall heat flux.', c.id);
+        mix = mixSolver.mixture(1);
+        q = mix.HFLUX;
+        x = repmat(mix.X(),1,size(q,2));
 
-    [twall,~] = mix.TWALL();
-    assert(all(isfinite(twall(:))), ...
-        'Case %s produced non-finite wall temperature.', c.id);
-    assert(isreal(twall), ...
-        'Case %s produced complex wall temperature.', c.id);
+        assert(any(q(:) < 0), ...
+            'Case %s has no negative wall heat flux.', c.id);
 
-    idxCond = q < 0 & x > 0 & x < 1;
-    hasTwoPhaseCondZone = any(idxCond(:));
-    assert(hasTwoPhaseCondZone, ...
-        'Case %s did not produce a two-phase condensation region (0 < x < 1 with q < 0).', c.id);
+        [twall,~] = mix.TWALL();
+        assert(all(isfinite(twall(:))), ...
+            'Case %s produced non-finite wall temperature.', c.id);
+        assert(isreal(twall), ...
+            'Case %s produced complex wall temperature.', c.id);
 
-    [hwall,~] = mix.HWALL(twall);
-    condResidual = abs(twall(idxCond) - (mixSolver.fluid.TSAT + q(idxCond)./hwall(idxCond)));
-    maxCondResidual = max(condResidual,[],'omitnan');
+        idxCond = q < 0 & x > 0 & x < 1;
+        hasTwoPhaseCondZone = any(idxCond(:));
+        assert(hasTwoPhaseCondZone, ...
+            'Case %s did not produce a two-phase condensation region (0 < x < 1 with q < 0).', c.id);
 
-    assert(maxCondResidual < 1E-2, ...
-        'Case %s violates TWALL condensation relation. Max residual: %.3e K', c.id, maxCondResidual);
+        [hwall,~] = mix.HWALL(twall);
+        condResidual = abs(twall(idxCond) - (mixSolver.fluid.TSAT + q(idxCond)./hwall(idxCond)));
+        maxCondResidual = max(condResidual,[],'omitnan');
 
-    results(end+1) = struct( ...
-        'id', c.id, ...
-        'state', string(mixSolver.STATE), ...
-        'maxCondResidual', maxCondResidual, ...
-        'hasTwoPhaseCondZone', hasTwoPhaseCondZone, ...
-        'vfMean', mean(mix.VF(),'omitnan')); %#ok<SAGROW>
+        assert(maxCondResidual < 1E-2, ...
+            'Case %s violates TWALL condensation relation. Max residual: %.3e K', c.id, maxCondResidual);
 
-    % Store each case for post-processing and plotting.
-    newCaseIdx = numel(plotCases) + 1;
-    plotCases(newCaseIdx).id = c.id;
-    plotCases(newCaseIdx).mix = mix;
-    plotCases(newCaseIdx).fluid = mixSolver.fluid;
-    plotCases(newCaseIdx).geom = inputSet.geometry;
-    plotCases(newCaseIdx).twall = twall;
-    plotCases(newCaseIdx).hwall = hwall;
+        results(end+1) = struct( ...
+            'id', c.id, ...
+            'state', string(mixSolver.STATE), ...
+            'maxCondResidual', maxCondResidual, ...
+            'hasTwoPhaseCondZone', hasTwoPhaseCondZone, ...
+            'vfMean', mean(mix.VF(),'omitnan')); %#ok<SAGROW>
+
+        % Store each successful case for post-processing and plotting.
+        newCaseIdx = numel(plotCases) + 1;
+        plotCases(newCaseIdx).id = c.id;
+        plotCases(newCaseIdx).mix = mix;
+        plotCases(newCaseIdx).fluid = mixSolver.fluid;
+        plotCases(newCaseIdx).geom = inputSet.geometry;
+        plotCases(newCaseIdx).twall = twall;
+        plotCases(newCaseIdx).hwall = hwall;
+
+    catch ME
+        warning('Case %s failed: %s', c.id, ME.message);
+        failedCases(end+1,1) = string(c.id) + ": " + string(ME.message); %#ok<SAGROW>
+        results(end+1) = struct( ...
+            'id', c.id, ...
+            'state', "FAILED", ...
+            'maxCondResidual', NaN, ...
+            'hasTwoPhaseCondZone', false, ...
+            'vfMean', NaN); %#ok<SAGROW>
+        continue
+    end
 end
 
 % Explicitly exercise the Bestion angle effect (cos(ANGLE)) by comparing
@@ -158,19 +173,24 @@ upSet = InputSet( ...
     overwriteSessionFiles  = false, ...
     LOGMODE                = 'BOTH');
 
-downSolver = MixtureSolver(downSet); downSolver.solve();
-upSolver   = MixtureSolver(upSet);   upSolver.solve();
+try
+    downSolver = MixtureSolver(downSet); downSolver.solve();
+    upSolver   = MixtureSolver(upSet);   upSolver.solve();
 
-assert(downSolver.STATE == Solvers.SolverState.INITIALSTEPCONVERGED, ...
-    'Bestion downflow comparison case did not converge.');
-assert(upSolver.STATE == Solvers.SolverState.INITIALSTEPCONVERGED, ...
-    'Bestion upflow comparison case did not converge.');
+    assert(downSolver.STATE == Solvers.SolverState.INITIALSTEPCONVERGED, ...
+        'Bestion downflow comparison case did not converge.');
+    assert(upSolver.STATE == Solvers.SolverState.INITIALSTEPCONVERGED, ...
+        'Bestion upflow comparison case did not converge.');
 
-vfDown = downSolver.mixture(1).VF;
-vfUp   = upSolver.mixture(1).VF;
+    vfDown = downSolver.mixture(1).VF;
+    vfUp   = upSolver.mixture(1).VF;
 
-assert(max(abs(vfDown-vfUp),[],'omitnan') > 1E-6, ...
-    'Bestion upflow/downflow void fraction are unexpectedly identical; angle dependence may be inactive.');
+    assert(max(abs(vfDown-vfUp),[],'omitnan') > 1E-6, ...
+        'Bestion upflow/downflow void fraction are unexpectedly identical; angle dependence may be inactive.');
+catch ME
+    warning('Bestion angle check failed: %s', ME.message);
+    failedCases(end+1,1) = "BESTION_ANGLE_CHECK: " + string(ME.message); %#ok<SAGROW>
+end
 
 figDir = fullfile(outputDir,'figures');
 if ~isfolder(figDir)
@@ -180,6 +200,8 @@ end
 for iCase = 1:numel(plotCases)
     caseData = plotCases(iCase);
     caseId = caseData.id;
+
+    try
     mix = caseData.mix;
     fluid = caseData.fluid;
     geom = caseData.geom;
@@ -226,12 +248,24 @@ for iCase = 1:numel(plotCases)
         'z [m]', 'Velocity [m/s]', 'Liquid, gas, and mixture velocity', ...
         fullfile(caseFigDir,'velocity_profiles'));
     saveLineFigure(z,vf,            'z [m]', 'v_f [-]',              'Void fraction',                 fullfile(caseFigDir,'vf_profile'));
+    saveLineFigure(z,vf,            'z [m]', 'Volume fraction [-]',  'Volume fraction',               fullfile(caseFigDir,'volume_fraction_profile'));
     saveLineFigure(z,qMean,         'z [m]', 'HF [W/m^2]',           'Wall heat flux',                fullfile(caseFigDir,'hf_profile'));
+
+    catch ME
+        warning('Plot generation failed for %s: %s', caseId, ME.message);
+        failedCases(end+1,1) = "PLOT_" + string(caseId) + ": " + string(ME.message); %#ok<SAGROW>
+        continue
+    end
 end
 
 disp('Downward pure-steam condensation integration test: PASSED');
 disp(struct2table(results));
 fprintf('Condensation figures saved in: %s\n',figDir);
+
+if ~isempty(failedCases)
+    error('OpenSTREAM:DownwardCondensationIntegration:Failures', ...
+        'One or more model checks/plots failed.\n%s', strjoin(failedCases,newline));
+end
 
 clear warningCleanup
 

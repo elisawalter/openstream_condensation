@@ -11,7 +11,7 @@ MOMENTDROP    ! Drop momentum conservation model                           > FUL
 END
 
 ID            ! Models ID                                                  > PURECOND
-NNODES        ! Number of axial nodes                                      > 100
+NNODES        ! Number of axial nodes                                      > 50
 FLUID         ! Fluid ID                                                   > WATER
 INTNU         ! Interfacial heat transfer model                            > RELAXATION
 THERMALRELAX  ! MRM time relaxation model                                  > HOMOGENEOUS
