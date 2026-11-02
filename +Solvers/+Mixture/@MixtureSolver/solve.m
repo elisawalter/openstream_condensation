@@ -165,28 +165,18 @@ function solver(solveINIT)
                 % TWALL-driven wall heat-flux update
                 bcType = string(mixSolver.boundaryConditions.BCTYPE(bcTidx));
                 if bcType ~= "HFLUX"
-                    % Use local saturation properties at updated local pressure.
-                    Plocal = max(1.0,mix(tIdx).P(zIdx));
-                    TsatLocal = fluid(tIdx).coolpropH.temperature('P',Plocal,'Q',1); % [K]
-                    hfgLocal = fluid(tIdx).coolpropH.enthalpy('P',Plocal,'Q',1) - ...
-                        fluid(tIdx).coolpropH.enthalpy('P',Plocal,'Q',0);            % [J/kg]
-
                     % Resolve target wall temperature profile at this node.
-                        twBC = reshape(mixSolver.boundaryConditions.TWALL(zIdx,:,bcTidx),1,[]);
+                    twBC = reshape(mixSolver.boundaryConditions.TWALL(zIdx,:,bcTidx),1,[]);
                     if any(isnan(twBC),"all")
                         error('OpenSTREAM:MixtureSolver:MissingTWALLProfile', ...
                             'TWALL profile contains NaN at node %d and time index %d for BCTYPE=%s.', ...
                             zIdx, bcTidx, bcType);
                     end
 
-                    % Get local condensation HTC based on current state.
-                    hcond = mix(tIdx).HWALLCOND(zIdx);                               % [W/m^2/K]
-                    hcond = max(hcond,1E-8);
-
-                    % Local fixed-point style update of q from target wall temperature.
+                    % Wall conduction resistance between prescribed and inner wall temperature.
                     switch bcType
                         case "TWALLIN"
-                            qTarget = hcond.*(twBC - TsatLocal);                      % [W/m^2]
+                            Rwall = 0;                                                 % [m^2.K/W]
                         case "TWALLOUT"
                             Di = geom.HDIAM;                                           % [m] Inner equivalent diameter
                             Do = geom.DOUT;                                            % [m] Outer wall diameter
@@ -198,13 +188,47 @@ function solver(solveINIT)
                             end
 
                             Rwall = Di.*log(Do./Di)./(2.*kw);                          % [m^2.K/W] Wall conduction resistance referred to inner wall
-                            qTarget = (twBC - TsatLocal)./(1./hcond + Rwall);          % [W/m^2]
                         otherwise
                             error('OpenSTREAM:MixtureSolver:InvalidBCTYPE', ...
                                 'Unsupported BCTYPE "%s".', bcType);
                     end
+                    twIn = twBC - Qiter.*Rwall;                                       % [K] Inner wall temperature estimate
 
-                    qTarget = min(0,qTarget);                                         % Condensation only
+                    % Flow regime dependent wall HTC and bulk temperature,
+                    % consistent with the regimes of HWALL and TWALL. The
+                    % regime is taken from the upstream node, which is fixed
+                    % during the inner iterations, to avoid regime flip-flop
+                    % at the condensation front.
+                    xloc = mix(tIdx).X(zIdx-1);                                       % [-] Upstream vapor quality
+                    if xloc <= 0
+                        % Single-phase (subcooled) liquid
+                        hwallBC = mix(tIdx).liquid.HWALL(twIn,zIdx);                  % [W/m^2/K]
+                        tbulkBC = mix(tIdx).liquid.T(zIdx);                           % [K]
+                    elseif xloc >= 1
+                        % Single-phase vapor
+                        hwallBC = mix(tIdx).vapor.HWALL(twIn,zIdx);                   % [W/m^2/K]
+                        tbulkBC = mix(tIdx).vapor.T(zIdx);                            % [K]
+                    else
+                        % Two-phase condensation
+                        hwallBC = mix(tIdx).HWALLCOND(zIdx);                          % [W/m^2/K]
+                        tbulkBC = fluid(tIdx).TSAT;                                   % [K]
+                    end
+                    hwallBC = max(hwallBC,1E-8);
+
+                    % Local fixed-point style update of q from target wall temperature.
+                    qTarget = (twBC - tbulkBC)./(1./hwallBC + Rwall);                 % [W/m^2]
+                    qTarget = min(0,qTarget);                                         % Wall cooling only
+
+                    % Limit the removed heat so that the fluid is not cooled below the
+                    % wall temperature, which bounds the enthalpy update for small W.
+                    Hwall = fluid(tIdx).coolpropH.enthalpy('P',fluid(tIdx).PRESSURE, ...
+                        'T',min(fluid(tIdx).TSAT,min(twIn))-1E-6);                    % [J/kg] Liquid enthalpy at wall temperature
+                    qRemoved = -sum(geom.PERIM.*qTarget).*DZ;                         % [W] Heat removed in this node
+                    qMax = max(0,mix(tIdx).W(zIdx).*(mix(tIdx).H(zIdx-1)-Hwall));     % [W] Maximum removable heat
+                    if qRemoved > qMax
+                        qTarget = qTarget.*qMax./qRemoved;
+                    end
+
                     qNew = (1-options.RELAXQ).*Qiter + options.RELAXQ.*qTarget;
 
                     % Preserve total-power consistency for TWALL mode by direct local update.
@@ -215,12 +239,6 @@ function solver(solveINIT)
 
                     % Record heat-flux convergence metric.
                     dQ = max(abs(qNew-Qiter));
-
-                    % Keep latent heat update local and pressure-consistent for diagnostics/mass-transfer coupling.
-                    mix(tIdx).MRM.TEVAP(zIdx,:) = mix(tIdx).MRM.TEVAP(zIdx,:).*0 + mix(tIdx).MRM.TEVAP(zIdx,:);
-                    mix(tIdx).MRM.TCOND(zIdx,:) = mix(tIdx).MRM.TCOND(zIdx,:).*0 + mix(tIdx).MRM.TCOND(zIdx,:);
-                    %#ok<NASGU>
-                    hfgLocal = hfgLocal; %#ok<NASGU>
                 else
                     dQ = 0;
                 end
@@ -386,10 +404,10 @@ function solver(solveINIT)
                 mixSolver.log('\tmax point iter = %3d in node %3d, max errors: W = %.7f [kg/s], P = %.5f [Pa], H = %.5f [J/kg]                    \r',maxN,maxzIdx,maxDW,maxDP,maxDH)
         end
         
-        % Temporal deviations in W, P, and H
-        timeDW  = max(abs((mix(tIdx).W - mix(tIdx-1).W)));
-        timeDP  = max(abs((mix(tIdx).P - mix(tIdx-1).P)));
-        timeDH  = max(abs((mix(tIdx).H - mix(tIdx-1).H)));
+        % Temporal deviations in W, P, and H (NaN prevents convergence)
+        timeDW  = max(abs((mix(tIdx).W - mix(tIdx-1).W)),[],'includenan');
+        timeDP  = max(abs((mix(tIdx).P - mix(tIdx-1).P)),[],'includenan');
+        timeDH  = max(abs((mix(tIdx).H - mix(tIdx-1).H)),[],'includenan');
         timeDWv = max(abs((mix(tIdx).MRM.WV - mix(tIdx-1).MRM.WV)),[],'all');
         timeDHv = max(abs((mix(tIdx).MRM.HV - mix(tIdx-1).MRM.HV)),[],'all');
         
