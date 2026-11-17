@@ -1,4 +1,6 @@
 ID            ! Options ID                                                 > DEFAULT
+RELAXQ        ! Relaxation factor for TWALL-driven wall heat flux update [-] > 0.5
+ERRORQ        ! Heat flux error target in inner iterations [W/m^2]        > 1E-1
 END
 
 ID            ! Options ID                                                 > TUTORIAL8E

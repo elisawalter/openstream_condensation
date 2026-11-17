@@ -1,8 +1,8 @@
 TIME          ! Time [s]                                                   > 0.0
-PRESSURE      ! System pressure [Pa]                                       > 6000000
-HIN           ! Inlet enthalpy [J/kg]                                      > 2.60E6
-MFLOW         ! Mass flow rate [kg/s]                                      > 0.07
-POWER         ! Total power [W]                                            > -35000
-WMESH         ! Relative power node size distribution [m]                  > 3.5 2.0
-WPOWER        ! Relative power distribution(s) [-]                         > 1.0 0.0
+PRESSURE      ! System pressure [Pa]                                       > 300000
+HIN           ! Inlet enthalpy [J/kg]                                      > 2.72E6
+MFLOW         ! Mass flow rate [kg/s]                                      > 0.05
+BCTYPE        ! Wall thermal boundary-condition type [-]                   > TWALLOUT
+TWALL         ! Wall temperature distribution(s) [K]                       > 385 385
+WMESH         ! Relative  node size distribution [m]                       > 1.5 1.5
 END

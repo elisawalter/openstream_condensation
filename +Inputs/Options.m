@@ -22,12 +22,14 @@ classdef Options < Inputs.Input
         ERRORW           (1,1) double  {mustBeNumeric}                     = 1E-3                  % Mass flow rate error target in inner iterations [kg/s]
         ERRORP           (1,1) double  {mustBeNumeric}                     = 1E-1                  % Pressure error target in inner iterations [Pa]
         ERRORH           (1,1) double  {mustBeNumeric}                     = 1E-1                  % Enthalpy error target in inner iterations [J/kg]
+        ERRORQ           (1,1) double  {mustBeNumeric,mustBeNonnegative}   = 1E-1                  % Heat flux error target in inner iterations [W/m^2]
         SSCONVW          (1,1) double  {mustBeNumeric}                     = 1E-3                  % Mass flow rate steady-state convergence criterion [kg/s]
         SSCONVP          (1,1) double  {mustBeNumeric}                     = 1E+0                  % Pressure steady-state convergence criterion [Pa]
         SSCONVH          (1,1) double  {mustBeNumeric}                     = 1E+0                  % Enthalpy steady-state convergence criterion [J/kg]
         RELAXWM          (1,1) double  {mustBeInRange(RELAXWM,0,1)}        = 1.0                   % Relaxation factor for the mixture mass conservation equation [-]
         RELAXPM          (1,1) double  {mustBeInRange(RELAXPM,0,1)}        = 1.0                   % Relaxation factor for the mixture momentum conservation equation [-]
         RELAXHM          (1,1) double  {mustBeInRange(RELAXHM,0,1)}        = 1.0                   % Relaxation factor for the mixture energy conservation equation [-]
+        RELAXQ           (1,1) double  {mustBeInRange(RELAXQ,0,1)}         = 0.5                   % Relaxation factor for TWALL-driven wall heat flux update [-]
 
         % Mixture (MRM) solver options
 

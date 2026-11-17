@@ -18,9 +18,11 @@ classdef BoundaryConditions < Inputs.Input
         PRESSURE         double  {mustBePositive, mustBeScalarOrEmpty}     = []                    % System pressure [Pa]
         HIN              double  {mustBePositive, mustBeScalarOrEmpty}     = []                    % Inlet enthalpy [J/kg]
         MFLOW            double  {mustBePositive, mustBeScalarOrEmpty}     = []                    % Mass flow rate [kg/s]
+        BCTYPE     (1,1) InputEnums.BCTYPE                           = 'HFLUX'               % Wall thermal boundary-condition type selected from :class:`InputEnums.BCTYPE`
         POWER      (1,1) double  {mustBeNumeric}                           = 0                     % Total power [W]
         WMESH      (1,:) double  {mustBePositive}                          = 1                     % Node size distribution [m]
         WPOWER     (:,:) double  {mustBeNonnegative}                       = 1                     % Relative power distribution(s) [-]
+        TWALL      (:,:) double  {mustBeNumeric}                           = NaN                   % Wall temperature distribution(s) [K]
 
     end
 
@@ -83,8 +85,13 @@ classdef BoundaryConditions < Inputs.Input
                 % default value should be used
                 [isSpecified, useDefault, defaultValue] = obj.validateInputEntry(objPropname);
                 if ~useDefault
-                    [objs.(objPropname)] = ...
-                        deal(obj.inputStruct.(objPropname));
+                    if strcmp(objPropname,'BCTYPE')
+                        [objs.(objPropname)] = ...
+                            deal(upper(obj.inputStruct.(objPropname)));
+                    else
+                        [objs.(objPropname)] = ...
+                            deal(obj.inputStruct.(objPropname));
+                    end
                 elseif useDefault
                     defaultValueFieldNames(end+1) = objPropname;
                     defaultValues{end+1} = defaultValue;
@@ -153,6 +160,19 @@ classdef BoundaryConditions < Inputs.Input
                         warning('OpenSTREAM:BoundaryConditionsWarning:AllZeroWPOWER', ...
                             'All elements of WPOWER at time index %u is 0. Using 1 instead.', ...
                             idx);
+                    end
+
+                    if ~all(isnan(objs(idx).TWALL),'all')
+                        expectedRows = prod([numel(objs(idx).WMESH), numel(objs(idx).geometryObj.PERIM)]);
+                        if size(objs(idx).TWALL,1) ~= expectedRows
+                            throw( ...
+                                MException('OpenSTREAM:InputError:BoundaryCondtionsInconsistency', ...
+                                'Inconsistent TWALL array size.') ...
+                                );
+                        end
+                        objs(idx).TWALL = reshape(objs(idx).TWALL, width(objs(idx).WMESH), []);
+                    else
+                        objs(idx).TWALL = NaN(width(objs(idx).WMESH), width(objs(idx).geometryObj.PERIM));
                     end
                 end
             end
