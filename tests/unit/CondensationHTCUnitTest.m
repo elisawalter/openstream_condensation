@@ -13,6 +13,8 @@ classdef CondensationHTCUnitTest < matlab.unittest.TestCase
     %   4. KIMMUDAWAR includes the two-phase multiplier, i.e. it exceeds
     %      the bare film term 0.048 Re_f^0.69 Pr_l^0.34 k_l/D.
     %   5. The coefficients are expanded to all walls.
+    %   6. KIMMUDAWAR is continuous across the laminar/turbulent and
+    %      annular/slug transitions, and finite as x -> 0.
     %
     % This class does not construct or run any OpenSTREAM solver.
 
@@ -106,6 +108,30 @@ classdef CondensationHTCUnitTest < matlab.unittest.TestCase
 
             testCase.verifyGreaterThan(testCase.evaluate("KIMMUDAWAR")./hFilm, 1, ...
                 "KIMMUDAWAR is missing the two-phase multiplier.");
+        end
+
+        function kimMudawarContinuous(testCase)
+            % KIMMUDAWARCONTINUOUS
+            %
+            % Verify that KIMMUDAWAR has no jump at the laminar/turbulent
+            % transitions and the annular/slug regime change. With
+            % G = 10 kg/m^2/s, Re_g passes 2000-4000 at x = 0.06-0.12; a
+            % step of 1E-4 in x must change h by < 1% over the quality range.
+
+            G  = 10;
+            xf = (0.01:1E-4:0.99).';
+            Rf = G.*(1-xf).*testCase.D./testCase.props.MUL;
+            h  = Solvers.Mixture.Mixture.CONDHTC("KIMMUDAWAR", xf, Rf, G, ...
+                testCase.D, testCase.g, testCase.props);
+
+            testCase.verifyLessThan(max(abs(diff(h))./h(1:end-1)), 0.01, ...
+                "KIMMUDAWAR jumps at a regime transition.");
+
+            % Slug/bubbly term keeps the HTC finite at vanishing quality.
+            h0 = Solvers.Mixture.Mixture.CONDHTC("KIMMUDAWAR", 1E-6, ...
+                G*testCase.D/testCase.props.MUL, G, testCase.D, testCase.g, testCase.props);
+            testCase.verifyGreaterThan(h0, 500, ...
+                "KIMMUDAWAR vanishes at low quality (slug/bubbly term missing).");
         end
 
         function expandToWalls(testCase)

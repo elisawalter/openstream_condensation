@@ -4,5 +4,7 @@ HIN           ! Inlet enthalpy [J/kg]                                      > 2.7
 MFLOW         ! Mass flow rate [kg/s]                                      > 0.05
 BCTYPE        ! Wall thermal boundary-condition type [-]                   > TWALLOUT
 TWALL         ! Wall temperature distribution(s) [K]                       > 385 385
-WMESH         ! Relative  node size distribution [m]                       > 1.5 1.5
+POWER         ! Total power [W] (initial estimate with TWALLOUT)           > -35000
+WMESH         ! Node size distribution [m]                                 > 1.5 1.5
+WPOWER        ! Relative power distribution(s) [-]                         > 0.5 0.5
 END

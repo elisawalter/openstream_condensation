@@ -3,6 +3,12 @@ RELAXQ        ! Relaxation factor for TWALL-driven wall heat flux update [-] > 0
 ERRORQ        ! Heat flux error target in inner iterations [W/m^2]        > 1E-1
 END
 
+ID            ! Options ID                                                 > PURECOND
+RELAXQ        ! Relaxation factor for TWALL-driven wall heat flux update [-] > 0.5
+ERRORQ        ! Heat flux error target in inner iterations [W/m^2]        > 1E-1
+SSTSTEP       ! Steady-state pseudo-time step [s] (slow condensate flow)   > 1E4
+END
+
 ID            ! Options ID                                                 > TUTORIAL8E
 TSTEP         ! Time step size for transient simulations [s]               > 0.2
 END

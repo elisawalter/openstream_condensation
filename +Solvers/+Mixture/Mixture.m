@@ -3089,11 +3089,13 @@ h = hI + hNu.*~regimeI;                                                    % [W/
 end
 
 function h = hcondKimMudawar(x, G, D, props)
-%HCONDKIMMUDAWAR Kim & Mudawar (2013) annular condensation [W/m^2/K]
+%HCONDKIMMUDAWAR Kim & Mudawar (2013) condensation [W/m^2/K]
 %
 % Annular-flow correlation with the vapor two-phase multiplier phi_g of
 % Kim & Mudawar (2012), using the laminar/turbulent combination of the
-% liquid and vapor flows.
+% liquid and vapor flows, and the slug/bubbly correlation for
+% We* < 7 X_tt^0.2 (Soliman modified Weber number). The slug/bubbly term
+% keeps the HTC finite as x -> 0, where the annular term vanishes.
 
 xv  = max(1E-8,min(1-1E-8,x));                                             % [-] Bounded quality
 sz  = size(xv + G + props.RHOL);                                           % Common size of the inputs
@@ -3109,15 +3111,34 @@ Sugo = RHOV.*props.SIGMA.*D./MUV.^2;                                       % [-]
 Xtt = ((1-xv)./xv).^0.9.*(RHOV./RHOL).^0.5.*(MUL./MUV).^0.1;               % [-] Turbulent-turbulent
 X   = sqrt((fanning(Ref).*(1-xv).^2./RHOL)./(fanning(Reg).*xv.^2./RHOV));  % [-] Regime-dependent
 
-% Two-phase multiplier coefficient (Kim & Mudawar 2012)
-lamf = Ref < 2000; lamg = Reg < 2000;
-C = 0.39.*Refo.^0.03.*Sugo.^0.10.*(RHOL./RHOV).^0.35;                      % [-] Turbulent liquid, turbulent vapor
-C(lamf & ~lamg) = 8.7E-4.*Refo(lamf & ~lamg).^0.17.*Sugo(lamf & ~lamg).^0.50.*(RHOL(lamf & ~lamg)./RHOV(lamf & ~lamg)).^0.14;
-C(~lamf & lamg) = 0.0015.*Refo(~lamf & lamg).^0.59.*Sugo(~lamf & lamg).^0.19.*(RHOL(~lamf & lamg)./RHOV(~lamf & lamg)).^0.36;
-C(lamf & lamg)  = 3.5E-5.*Refo(lamf & lamg).^0.44.*Sugo(lamf & lamg).^0.50.*(RHOL(lamf & lamg)./RHOV(lamf & lamg)).^0.48;
+% Two-phase multiplier coefficient (Kim & Mudawar 2012). The laminar and
+% turbulent coefficients are blended over the transitional range
+% (:func:`turbulentWeight`) instead of switching at Re = 2000, which made
+% the HTC jump by a factor of two and stalled the TWALL iterations.
+rr  = RHOL./RHOV;
+Ctt = 0.39  .*Refo.^0.03.*Sugo.^0.10.*rr.^0.35;                            % [-] Turbulent liquid, turbulent vapor
+Clt = 8.7E-4.*Refo.^0.17.*Sugo.^0.50.*rr.^0.14;                            % [-] Laminar liquid, turbulent vapor
+Ctl = 0.0015.*Refo.^0.59.*Sugo.^0.19.*rr.^0.36;                            % [-] Turbulent liquid, laminar vapor
+Cll = 3.5E-5.*Refo.^0.44.*Sugo.^0.50.*rr.^0.48;                            % [-] Laminar liquid, laminar vapor
+wf = turbulentWeight(Ref); wg = turbulentWeight(Reg);
+C = (1-wf).*(1-wg).*Cll + (1-wf).*wg.*Clt + wf.*(1-wg).*Ctl + wf.*wg.*Ctt;
 phig = sqrt(1 + C.*X + X.^2);                                              % [-] Vapor two-phase multiplier
 
-h = 0.048.*Ref.^0.69.*props.PRL.^0.34.*phig./Xtt.*props.KL./D;              % [W/m^2/K]
+% Annular and slug/bubbly Nusselt numbers (Kim & Mudawar 2013, Table 4)
+PRL   = props.PRL + zeros(sz);
+NuAnn = 0.048.*Ref.^0.69.*PRL.^0.34.*phig./Xtt;                            % [-] Annular
+NuNon = sqrt(NuAnn.^2 + (3.2E-7.*Ref.^-0.38.*Sugo.^1.39).^2);              % [-] Slug and bubbly
+
+% Soliman modified Weber number, blended across Re_f = 1250 (1000-1500)
+den   = Sugo.^0.3.*(1 + 1.09.*Xtt.^0.039).^0.4;
+WeLo  = 2.45.*Reg.^0.64./den;                                              % [-] Re_f <= 1250
+WeHi  = 0.85.*Reg.^0.79.*Xtt.^0.157.*((MUV./MUL).^2.*RHOL./RHOV).^0.084./den; % [-] Re_f > 1250
+wRe   = smoothStep((Ref-1000)./500);
+WeS   = (1-wRe).*WeLo + wRe.*WeHi;
+
+% Annular for We* > 7 X_tt^0.2; blended over +-20% of the criterion
+wAnn  = smoothStep((log(WeS./(7.*Xtt.^0.2)) + log(1.2))./(2*log(1.2)));
+h = (wAnn.*NuAnn + (1-wAnn).*NuNon).*props.KL./D;                          % [W/m^2/K]
 end
 
 function hlo = liquidOnlyHTC(G, D, props)
@@ -3129,8 +3150,27 @@ end
 
 function f = fanning(Re)
 %FANNING Fanning friction factor for laminar and turbulent flow [-]
+%
+% Laminar 16/Re, turbulent the larger of the Blasius (0.079 Re^-0.25) and
+% McAdams (0.046 Re^-0.2) forms, which is continuous. The two regimes are
+% blended over the transitional range (:func:`turbulentWeight`).
 
-f = 16./Re;
-f(Re >= 2000 & Re < 2E4) = 0.079.*Re(Re >= 2000 & Re < 2E4).^-0.25;
-f(Re >= 2E4) = 0.046.*Re(Re >= 2E4).^-0.2;
+fTurb = max(0.079.*Re.^-0.25, 0.046.*Re.^-0.2);                            % [-] Turbulent
+w = turbulentWeight(Re);
+f = (1-w).*16./Re + w.*fTurb;
+end
+
+function w = turbulentWeight(Re)
+%TURBULENTWEIGHT Smooth laminar-to-turbulent weight [-]
+%
+% 0 below Re = 2000, 1 above Re = 4000, cubic smoothstep in between.
+
+w = smoothStep((Re-2000)./2000);
+end
+
+function w = smoothStep(t)
+%SMOOTHSTEP Cubic smoothstep, 0 for t <= 0 and 1 for t >= 1 [-]
+
+t = min(1,max(0,t));
+w = t.^2.*(3-2.*t);
 end

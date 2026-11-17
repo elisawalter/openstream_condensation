@@ -13,3 +13,12 @@ ANGLE     ! Angle [rad]                    > 180
 DOUT      ! Outer diameter [m]             > 0.05
 KWALL     ! Thermal conductivity [W/(m K)] > 8.977
 END
+
+ID        ! Channel ID                     > PURECOND_UP
+LENGTH    ! Axial length [m]               > 3.0
+AREA      ! Coolant area [m^2]             > 1.257e-03
+PERIM     ! Perimeters [m]                 > 0.126
+ANGLE     ! Angle [rad]                    > 0
+DOUT      ! Outer diameter [m]             > 0.05
+KWALL     ! Thermal conductivity [W/(m K)] > 8.977
+END
