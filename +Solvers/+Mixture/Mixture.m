@@ -1360,6 +1360,44 @@ classdef Mixture < Solvers.AbstractField
 
     methods (Static)
 
+        function vf = VFDRIFTBOUNDED(JG, JL, C0, ugj0)
+            %VFDRIFTBOUNDED Drift-flux void fraction with vanishing drift at vf = 1 [-]
+            %
+            % Solves vf = JG/(C0 (JG+JL) + ugj0 (1-vf)) on [0,1] by
+            % bisection. With C0 = 1 the drift velocity is
+            % ugj = (1-vf)(ug-ul), so the linear reduction keeps the phase
+            % slip velocity ug-ul = ugj0 bounded as vf -> 1 (a weaker
+            % reduction such as ((1-vf)/(1+vf))^0.5 makes the liquid velocity
+            % diverge in downflow). The residual vf (C0 j + ugj) - JG is -JG
+            % at vf = 0 and (C0-1) JG + C0 JL >= 0 at vf = 1 for C0 >= 1, so a
+            % root in [0,1] always exists, also for a negative (downflow)
+            % drift velocity.
+            %
+            % Inputs:
+            %
+            % - JG   — Vapor superficial velocity [m/s]
+            % - JL   — Liquid superficial velocity [m/s]
+            % - C0   — Distribution parameter [-]
+            % - ugj0 — Drift velocity at vf = 0 [m/s]
+            %
+            % Returns:
+            %
+            % - vf — Void fraction [-]
+
+            sz   = size(JG + JL + C0 + ugj0);
+            JG   = JG + zeros(sz); J = JG + JL + zeros(sz);
+            C0   = C0 + zeros(sz); ugj0 = ugj0 + zeros(sz);
+            res  = @(a) a.*(C0.*J + ugj0.*(1-a)) - JG;                    % [m/s] Residual
+            lo   = zeros(sz); hi = ones(sz);
+            for it = 1:60
+                mid = (lo + hi)/2;
+                neg = res(mid) < 0;
+                lo(neg) = mid(neg); hi(~neg) = mid(~neg);
+            end
+            vf = (lo + hi)/2;
+            vf(JG <= 0) = 0;
+        end
+
         function h = CONDHTC(condhtm, x, Ref, G, D, g, props)
             %CONDHTC Condensation heat transfer coefficient correlations [W/m^2/K]
             %
@@ -2557,11 +2595,18 @@ classdef Mixture < Solvers.AbstractField
                     % [-] Bestion drift flux model
                     %
                     % :cite:t:`BESTION1990229`
+                    % The drift velocity is reduced by (1-vf) so that it
+                    % vanishes as vf -> 1 with a bounded phase slip
+                    % (:func:`VFDRIFTBOUNDED`). With a constant drift velocity
+                    % and C0 = 1 the void fraction exceeds 1 in downflow
+                    % whenever |ugj| > jl and stays well below 1 at x -> 1 in
+                    % upflow.
                     C0 = 1.;                                               % [-] Distribution parameter
                     RHOL = mix.fluid.RHOL(mix.liquid.H(zIdx));
                     RHOV = mix.fluid.RHOV(mix.vapor.H(zIdx));
-                    ugj = 0.188.*sqrt(model.G.*geom.HDIAM.*(RHOL-RHOV)./RHOV).*cos(geom.ANGLE/180*pi); % [m/s] Drift velocity
-                    mix.vf(zIdx) = vfdrift(C0,ugj);
+                    ugj0 = 0.188.*sqrt(model.G.*geom.HDIAM.*(RHOL-RHOV)./RHOV).*cos(geom.ANGLE/180*pi); % [m/s] Drift velocity at vf = 0
+                    mix.vf(zIdx) = Solvers.Mixture.Mixture.VFDRIFTBOUNDED( ...
+                        mix.JG(zIdx), mix.JL(zIdx), C0, ugj0);
 
                 case InputEnums.VOID.EPRI
                     % [-] EPRI drift flux model

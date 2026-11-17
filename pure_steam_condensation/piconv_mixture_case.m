@@ -70,6 +70,14 @@ fprintf(fid,'ANGLE     ! Angle [deg]                    > 180\n');
 fprintf(fid,'END\n');
 fclose(fid);
 
+% Wall temperature at the section centres, interpolated linearly in between
+% (AXIALINTERP linear). WMESH defines the segment ends, so the mesh is
+% 0.15, 0.3 x 9, 0.15 m with the measured values at the centres and a linear
+% extrapolation to the outlet; the inlet value is extrapolated by interp1.
+TwiK  = data.Twi(:).' + 273.15;                                            % [K]
+TWBC  = [TwiK, TwiK(end) + (TwiK(end)-TwiK(end-1))/2];                     % [K] At 0.15, 0.45, ..., 2.85, 3.0 m
+WMBC  = [DSEC/2, DSEC*ones(1,NSEC-1), DSEC/2];                             % [m]
+
 bcFile = fullfile(caseDir,'bc.inp');
 fid = fopen(bcFile,'w');
 fprintf(fid,'TIME          ! Time [s]                                                   > 0.0\n');
@@ -77,10 +85,10 @@ fprintf(fid,'PRESSURE      ! System pressure [Pa]                               
 fprintf(fid,'HIN           ! Inlet enthalpy [J/kg]                                      > %.8g\n',HIN);
 fprintf(fid,'MFLOW         ! Mass flow rate [kg/s]                                      > %.8g\n',data.G*AREA);
 fprintf(fid,'BCTYPE        ! Wall thermal boundary-condition type [-]                   > TWALLIN\n');
-fprintf(fid,'TWALL         ! Measured inner wall temperature [K]                        > %s\n',sprintf('%.6g ',data.Twi+273.15));
+fprintf(fid,'TWALL         ! Measured inner wall temperature at section centres [K]     > %s\n',sprintf('%.6g ',TWBC));
 fprintf(fid,'POWER         ! Total power [W] (unused with TWALLIN)                      > -1\n');
-fprintf(fid,'WMESH         ! Measurement section lengths [m]                            > %s\n',sprintf('%.6g ',DSEC*ones(1,NSEC)));
-fprintf(fid,'WPOWER        ! Relative power distribution(s) [-]                         > %s\n',sprintf('%g ',ones(1,NSEC)));
+fprintf(fid,'WMESH         ! Segment lengths ending at the section centres [m]          > %s\n',sprintf('%.6g ',WMBC));
+fprintf(fid,'WPOWER        ! Relative power distribution(s) [-]                         > %s\n',sprintf('%g ',ones(1,numel(WMBC))));
 fprintf(fid,'END\n');
 fclose(fid);
 
@@ -90,6 +98,7 @@ fprintf(fid,'ID            ! Options ID                                         
 fprintf(fid,'RELAXQ        ! Relaxation factor for TWALL-driven wall heat flux update [-] > 0.5\n');
 fprintf(fid,'ERRORQ        ! Heat flux error target in inner iterations [W/m^2]        > 1E-1\n');
 fprintf(fid,'SSTSTEP       ! Steady-state pseudo-time step [s] (slow condensate flow)   > 1E4\n');
+fprintf(fid,'AXIALINTERP   ! Axial interpolation of wall temperature [-]                > linear\n');
 fprintf(fid,'END\n');
 fclose(fid);
 

@@ -198,6 +198,10 @@ try
     vfDown = convergedState(downSolver).VF;
     vfUp   = convergedState(upSolver).VF;
 
+    assert(all(vfDown >= 0 & vfDown <= 1) && all(vfUp >= 0 & vfUp <= 1), ...
+        'Bestion void fraction outside [0,1] (down %.4f..%.4f, up %.4f..%.4f).', ...
+        min(vfDown), max(vfDown), min(vfUp), max(vfUp));
+
     assert(max(abs(vfDown-vfUp),[],'omitnan') > 1E-6, ...
         'Bestion upflow/downflow void fraction are unexpectedly identical; angle dependence may be inactive.');
 catch ME
