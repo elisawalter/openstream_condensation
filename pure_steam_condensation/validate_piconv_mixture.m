@@ -30,8 +30,8 @@ if ~isfolder(outputDir), mkdir(outputDir); end
 
 runIds = [1 113 119 124 129 5 6 7 8 9 134 140 145 13 150 15 16 17 18 19 ...
     197 203 23 208 213 218 224 229 234 235 236];
-models = ["NUSSELT","SHAH","KIMMUDAWAR"];
-colors = [0.00 0.45 0.74; 0.85 0.33 0.10; 0.47 0.67 0.19];
+models = ["NUSSELT","SHAH","SHAH2009","KIMMUDAWAR","NUSSELTSHAH"];
+colors = [0.00 0.45 0.74; 0.85 0.33 0.10; 0.93 0.69 0.13; 0.47 0.67 0.19; 0.49 0.18 0.56];
 
 %% Simulations
 
@@ -79,10 +79,10 @@ for i = 1:numel(results)
             'ok',arrayfun(@(m) r.models.(m).ok, models)); %#ok<SAGROW>
     end
     states = arrayfun(@(m) r.models.(m).state, models);
-    summary = [summary; table(r.runId, d.P/1E5, d.G, d.xin, d.xout, all(d.valid), d.Qw/1E3, ...
-        Qpred(1)/1E3, Qpred(2)/1E3, Qpred(3)/1E3, states, ...
-        'VariableNames',{'run','P_bar','G','x_in','x_out','all_valid','Qexp_kW', ...
-        'Q_NUSSELT_kW','Q_SHAH_kW','Q_KIMMUDAWAR_kW','states'})]; %#ok<AGROW>
+    summary = [summary; [table(r.runId, d.P/1E5, d.G, d.xin, d.xout, all(d.valid), d.Qw/1E3, ...
+        'VariableNames',{'run','P_bar','G','x_in','x_out','all_valid','Qexp_kW'}), ...
+        array2table(Qpred/1E3,'VariableNames',"Q_"+models+"_kW"), ...
+        table(states,'VariableNames',{'states'})]]; %#ok<AGROW>
 end
 
 HFexp  = [rows.HFexp].';
@@ -90,7 +90,7 @@ HFpred = vertcat(rows.HFpred);
 HFpred(~vertcat(rows.ok)) = NaN;                                           % Statistics on converged runs only
 relErr = HFpred./HFexp - 1;
 allValid = [rows.allValid].';
-QErr   = summary{:,{'Q_NUSSELT_kW','Q_SHAH_kW','Q_KIMMUDAWAR_kW'}}./summary.Qexp_kW - 1;
+QErr   = summary{:,"Q_"+models+"_kW"}./summary.Qexp_kW - 1;
 QErr(~summary.all_valid,:) = NaN;                                          % Total heat only for runs with all sections valid
 QErr(summary.states ~= "INITIALSTEPCONVERGED") = NaN;
 converged = sum(summary.states == "INITIALSTEPCONVERGED").';
@@ -117,7 +117,7 @@ writetable(stats,fullfile(outputDir,'statistics.csv'));
 %% Figures
 
 % Parity plot of local wall heat flux
-fig = figure('Visible','off','Position',[100 100 1350 450]);
+fig = figure('Visible','off','Position',[100 100 420*numel(models)+150 450]);
 tl = tiledlayout(fig,1,numel(models),'TileSpacing','compact');
 lim = [0 1.1*max(HFexp)]/1E3;
 for m = 1:numel(models)

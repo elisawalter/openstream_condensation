@@ -1068,52 +1068,21 @@ classdef Mixture < Solvers.AbstractField
 
             X   = max(0,min(1,mix.X(zIdx)));                               % [-] Quality in [0,1]
             Ww  = max(1E-12,mix.WWALL(zIdx));                              % [kg/s] Wall-distributed flow rate
-            RHOL = fld.RHOL(mix.liquid.H(zIdx));                            % [kg/m^3]
-            RHOV = fld.RHOV(mix.vapor.H(zIdx));                             % [kg/m^3]
-            MUL  = fld.MUL(mix.liquid.H(zIdx));                             % [Pa.s]
-            KL   = fld.KL(mix.liquid.H(zIdx));                              % [W/m/K]
-            PRL  = fld.PRANDTLL(mix.liquid.H(zIdx));                        % [-]
+
+            props.RHOL  = fld.RHOL(mix.liquid.H(zIdx));                     % [kg/m^3]
+            props.RHOV  = fld.RHOV(mix.vapor.H(zIdx));                      % [kg/m^3]
+            props.MUL   = fld.MUL(mix.liquid.H(zIdx));                      % [Pa.s]
+            props.MUV   = fld.MUV(mix.vapor.H(zIdx));                       % [Pa.s]
+            props.KL    = fld.KL(mix.liquid.H(zIdx));                       % [W/m/K]
+            props.PRL   = fld.PRANDTLL(mix.liquid.H(zIdx));                 % [-]
+            props.SIGMA = fld.SIGMA;                                       % [N/m]
+            props.PR    = fld.PRESSURE./fld.PCRIT;                         % [-] Reduced pressure
 
             % Film Reynolds number based on local wall perimeter.
-            Ref = 4.*(1-X).*Ww./(max(1E-12,MUL).*geom.PERIM);               % [-]
-            Ref = max(1E-8,Ref);
+            Ref = 4.*(1-X).*Ww./(max(1E-12,props.MUL).*geom.PERIM);         % [-]
 
-            switch model.CONDHTM
-                case InputEnums.CONDHTM.NONE
-                    hwallcond = zeros(size(Ww));
-
-                case InputEnums.CONDHTM.NUSSELT
-                    % Nusselt-type vertical-film piecewise correlation.
-                    g  = model.G;
-                    nu = max(1E-12,MUL./max(1E-12,RHOL));
-                    hstar = zeros(size(Ref));
-
-                    idxLam = Ref < 30;
-                    idxWav = Ref >= 30 & Ref < 1600;
-                    idxTur = Ref >= 1600;
-
-                    hstar(idxLam) = 1.47.*Ref(idxLam).^(-1/3);
-                    hstar(idxWav) = Ref(idxWav)./(1.08.*Ref(idxWav).^1.22 - 5.2);
-                    hstar(idxTur) = Ref(idxTur)./(8750 + 58.*PRL(idxTur).^(-0.5).*(Ref(idxTur).^0.75 - 253));
-
-                    hwallcond = hstar.*KL./(nu.^2./g).^(1/3);
-
-                case InputEnums.CONDHTM.SHAH
-                    % Simplified Shah-type condensation scaling.
-                    REL = max(1,mix.MFLUX(zIdx).*geom.HDIAM./max(1E-12,MUL));
-                    Xtt = ((1-X)./max(1E-8,X)).^0.9.*(RHOV./RHOL).^0.5.*(MUL./max(1E-12,fld.MUV(mix.vapor.H(zIdx)))).^0.1;
-                    NUL = 0.023.*REL.^0.8.*PRL.^0.4;
-                    hsp = NUL.*KL./geom.HDIAM;
-                    hwallcond = hsp.*(1 + 1.8./max(1E-8,Xtt).^0.8);
-
-                case InputEnums.CONDHTM.KIMMUDAWAR
-                    % Shear-dominated condensation proxy based on liquid film Reynolds.
-                    RELf = max(1,Ref);
-                    NULf = 0.048.*RELf.^0.69.*PRL.^0.34;
-                    hwallcond = NULf.*KL./geom.HDIAM;
-            end
-
-            hwallcond = max(0,hwallcond);
+            hwallcond = Solvers.Mixture.Mixture.CONDHTC(model.CONDHTM, X, Ref, ...
+                mix.MFLUX(zIdx), geom.HDIAM, model.G, props);              % [W/m^2/K]
          end
 
          function [hwallbt, Tbv] = HWALLPOSTCBT(mix, twall, zIdx)
@@ -1385,6 +1354,56 @@ classdef Mixture < Solvers.AbstractField
             tbulk = Tbl;
             tbulk(idxCond) = mix.fluid.TSAT;
             tbulk(idxbt) = Tbv(idxbt);
+        end
+
+    end
+
+    methods (Static)
+
+        function h = CONDHTC(condhtm, x, Ref, G, D, g, props)
+            %CONDHTC Condensation heat transfer coefficient correlations [W/m^2/K]
+            %
+            % Evaluates the condensation heat transfer coefficient selected
+            % from :class:`InputEnums.CONDHTM` for given local conditions.
+            % Used by :meth:`Solvers.Mixture.Mixture.HWALLCOND` and by
+            % stand-alone assessments of the correlations against data.
+            %
+            % Inputs:
+            %
+            % - condhtm — Model from :class:`InputEnums.CONDHTM` (or its name)
+            % - x       — Vapor quality [-]
+            % - Ref     — Film Reynolds number 4*Gamma/mu_l per wall [-]
+            % - G       — Mass flux [kg/m^2/s]
+            % - D       — Hydraulic diameter [m]
+            % - g       — Gravitational acceleration [m/s^2]
+            % - props   — Struct with RHOL, RHOV [kg/m^3], MUL, MUV [Pa.s],
+            %             KL [W/m/K], PRL [-], SIGMA [N/m] and PR (reduced pressure) [-]
+            %
+            % Returns:
+            %
+            % - h       — Heat transfer coefficient, same size as Ref [W/m^2/K]
+
+            condhtm = InputEnums.CONDHTM(condhtm);
+            x   = max(0,min(1,x));                                         % [-]
+            Ref = max(1E-8,Ref);                                           % [-]
+
+            switch condhtm
+                case InputEnums.CONDHTM.NONE
+                    h = 0;
+                case InputEnums.CONDHTM.NUSSELT
+                    h = hcondNusselt(Ref, g, props);
+                case InputEnums.CONDHTM.SHAH
+                    h = hcondShah1979(x, G, D, props);
+                case InputEnums.CONDHTM.SHAH2009
+                    h = hcondShah2009(x, G, D, g, props);
+                case InputEnums.CONDHTM.KIMMUDAWAR
+                    h = hcondKimMudawar(x, G, D, props);
+                case InputEnums.CONDHTM.NUSSELTSHAH
+                    % Gravity-driven film with vapor-shear enhancement at high mass flux
+                    h = max(hcondNusselt(Ref, g, props), hcondShah1979(x, G, D, props));
+            end
+
+            h = max(0, h + zeros(size(Ref)));                              % [W/m^2/K] Expand to all walls
         end
 
     end
@@ -3018,3 +3037,100 @@ classdef Mixture < Solvers.AbstractField
 
 end
 
+%% --- Condensation heat transfer correlations ---
+
+function h = hcondNusselt(Ref, g, props)
+%HCONDNUSSELT Gravity-driven vertical film condensation [W/m^2/K]
+%
+% Piecewise film correlation in the film Reynolds number: Nusselt laminar
+% (Re_f < 30), Kutateladze wavy-laminar (30 <= Re_f < 1600) and Labuntsov
+% turbulent (Re_f >= 1600).
+
+nu  = max(1E-12,props.MUL./max(1E-12,props.RHOL));                         % [m^2/s] Liquid kinematic viscosity
+PRL = props.PRL + zeros(size(Ref));                                        % [-] Expand to all walls
+hstar = zeros(size(Ref));
+
+idxLam = Ref < 30;
+idxWav = Ref >= 30 & Ref < 1600;
+idxTur = Ref >= 1600;
+
+hstar(idxLam) = 1.47.*Ref(idxLam).^(-1/3);
+hstar(idxWav) = Ref(idxWav)./(1.08.*Ref(idxWav).^1.22 - 5.2);
+hstar(idxTur) = Ref(idxTur)./(8750 + 58.*PRL(idxTur).^(-0.5).*(Ref(idxTur).^0.75 - 253));
+
+h = hstar.*props.KL./(nu.^2./g).^(1/3);                                    % [W/m^2/K]
+end
+
+function h = hcondShah1979(x, G, D, props)
+%HCONDSHAH1979 Shah (1979) film condensation inside tubes [W/m^2/K]
+
+hlo = liquidOnlyHTC(G, D, props);                                          % [W/m^2/K]
+h = hlo.*((1-x).^0.8 + 3.8.*x.^0.76.*(1-x).^0.04./props.PR.^0.38);         % [W/m^2/K]
+end
+
+function h = hcondShah2009(x, G, D, g, props)
+%HCONDSHAH2009 Shah (2009) condensation in vertical tubes [W/m^2/K]
+%
+% Regime I (shear-dominated) uses h_I only; regime II adds the Nusselt
+% film contribution h_Nu.
+
+RHOL = props.RHOL; RHOV = props.RHOV;
+hlo = liquidOnlyHTC(G, D, props);                                          % [W/m^2/K]
+n   = 0.0058 + 0.557.*props.PR;                                            % [-]
+hI  = hlo.*(props.MUL./(14.*props.MUV)).^n.* ...
+      ((1-x).^0.8 + 3.8.*x.^0.76.*(1-x).^0.04./props.PR.^0.38);            % [W/m^2/K] Shear-dominated
+Rels = max(1E-8,G.*(1-x).*D./props.MUL);                                   % [-] Superficial liquid Reynolds number
+hNu = 1.32.*Rels.^(-1/3).* ...
+      (RHOL.*(RHOL-RHOV).*g.*props.KL.^3./props.MUL.^2).^(1/3);            % [W/m^2/K] Gravity-driven
+Z   = (1./max(1E-8,x)-1).^0.8.*props.PR.^0.4;                              % [-] Shah correlating parameter
+Jg  = x.*G./sqrt(g.*D.*RHOV.*(RHOL-RHOV));                                 % [-] Dimensionless vapor velocity
+regimeI = Jg >= 1./(2.4.*Z + 0.73);
+h = hI + hNu.*~regimeI;                                                    % [W/m^2/K]
+end
+
+function h = hcondKimMudawar(x, G, D, props)
+%HCONDKIMMUDAWAR Kim & Mudawar (2013) annular condensation [W/m^2/K]
+%
+% Annular-flow correlation with the vapor two-phase multiplier phi_g of
+% Kim & Mudawar (2012), using the laminar/turbulent combination of the
+% liquid and vapor flows.
+
+xv  = max(1E-8,min(1-1E-8,x));                                             % [-] Bounded quality
+sz  = size(xv + G + props.RHOL);                                           % Common size of the inputs
+xv  = xv + zeros(sz); G = G + zeros(sz);
+RHOL = props.RHOL + zeros(sz); RHOV = props.RHOV + zeros(sz);
+MUL  = props.MUL + zeros(sz);  MUV  = props.MUV + zeros(sz);
+Refo = G.*D./MUL;                                                          % [-] Liquid-only Reynolds number
+Ref = max(1,Refo.*(1-xv));                                                 % [-] Liquid film Reynolds number
+Reg = max(1,G.*xv.*D./MUV);                                                % [-] Vapor Reynolds number
+Sugo = RHOV.*props.SIGMA.*D./MUV.^2;                                       % [-] Vapor-only Suratman number
+
+% Martinelli parameters
+Xtt = ((1-xv)./xv).^0.9.*(RHOV./RHOL).^0.5.*(MUL./MUV).^0.1;               % [-] Turbulent-turbulent
+X   = sqrt((fanning(Ref).*(1-xv).^2./RHOL)./(fanning(Reg).*xv.^2./RHOV));  % [-] Regime-dependent
+
+% Two-phase multiplier coefficient (Kim & Mudawar 2012)
+lamf = Ref < 2000; lamg = Reg < 2000;
+C = 0.39.*Refo.^0.03.*Sugo.^0.10.*(RHOL./RHOV).^0.35;                      % [-] Turbulent liquid, turbulent vapor
+C(lamf & ~lamg) = 8.7E-4.*Refo(lamf & ~lamg).^0.17.*Sugo(lamf & ~lamg).^0.50.*(RHOL(lamf & ~lamg)./RHOV(lamf & ~lamg)).^0.14;
+C(~lamf & lamg) = 0.0015.*Refo(~lamf & lamg).^0.59.*Sugo(~lamf & lamg).^0.19.*(RHOL(~lamf & lamg)./RHOV(~lamf & lamg)).^0.36;
+C(lamf & lamg)  = 3.5E-5.*Refo(lamf & lamg).^0.44.*Sugo(lamf & lamg).^0.50.*(RHOL(lamf & lamg)./RHOV(lamf & lamg)).^0.48;
+phig = sqrt(1 + C.*X + X.^2);                                              % [-] Vapor two-phase multiplier
+
+h = 0.048.*Ref.^0.69.*props.PRL.^0.34.*phig./Xtt.*props.KL./D;              % [W/m^2/K]
+end
+
+function hlo = liquidOnlyHTC(G, D, props)
+%LIQUIDONLYHTC Dittus-Boelter HTC with all mass flowing as liquid [W/m^2/K]
+
+Relo = max(1,G.*D./props.MUL);                                             % [-] Liquid-only Reynolds number
+hlo  = 0.023.*Relo.^0.8.*props.PRL.^0.4.*props.KL./D;                      % [W/m^2/K]
+end
+
+function f = fanning(Re)
+%FANNING Fanning friction factor for laminar and turbulent flow [-]
+
+f = 16./Re;
+f(Re >= 2000 & Re < 2E4) = 0.079.*Re(Re >= 2000 & Re < 2E4).^-0.25;
+f(Re >= 2E4) = 0.046.*Re(Re >= 2E4).^-0.2;
+end

@@ -26,7 +26,7 @@ arguments
     opts.dataFile  (1,1) string = fullfile(fileparts(mfilename('fullpath')),'PICONV_data_Ahn.xlsx')
     opts.outputDir (1,1) string = fullfile(fileparts(mfilename('fullpath')),'outputs','validation_piconv_mixture')
     opts.NNODES    (1,1) double {mustBeInteger,mustBePositive} = 60
-    opts.CONDHTM   (1,:) string = ["NUSSELT","SHAH","KIMMUDAWAR"]
+    opts.CONDHTM   (1,:) string = ["NUSSELT","SHAH","SHAH2009","KIMMUDAWAR","NUSSELTSHAH"]
     opts.VOID      (1,1) string = "ZIVI"
 end
 
